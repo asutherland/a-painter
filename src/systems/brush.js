@@ -282,14 +282,125 @@ AFRAME.registerSystem('brush', {
       }
     }
   },
+  // Hacky, limited JSON support for developing brushes.  Load like so:
+  // http://localhost:8080/?url=/json-scenes/line-orientations.json
+  loadJSON: function(serialized) {
+    if (serialized.magic !== 'apainter' || serialized.version !== 1) {
+      console.error('bad a-painter JSON format');
+      return;
+    }
+
+    console.log('painting JSON loaded, rendering strokes now.');
+    var xRot = new THREE.Quaternion();
+    var xPlaneProj = new THREE.Vector3();
+    var yRot = new THREE.Quaternion();
+    var yPlaneProj = new THREE.Vector3();
+    var orientation = new THREE.Quaternion();
+    var delta = new THREE.Vector3();
+    var sideDelta = new THREE.Vector3();
+    var alongController= new THREE.Vector3(0, 0, 1);
+
+    var yFightAdjust = 0;
+
+    for (var i = 0; i < serialized.strokes.length; i++) {
+      var strokeDef = serialized.strokes[i];
+      var color = new THREE.Color(strokeDef.color);
+      var size = strokeDef.size || 0.2;
+      var stroke = this.addNewStroke(strokeDef.brush, color, size);
+
+      // Since we assume many things will be parallel to the ground and will use
+      // sane human values which can lead to z-buffer fighting, we bump the y
+      // coordinates of each stroke's coordinate by a fixed offset.  And for
+      // each new independent stroke, we slightly bump that offset so that
+      // there's also a conceptual z-index with later strokes covering earlier
+      // strokes.
+      yFightAdjust += 0.0001;
+
+      // for orientation purposes, we want a last position.  For the base case,
+      // we need to look into the future (if we have one).  We'll also negate in
+      // the p=0 case to compensate for this inversion.  If there's only one
+      // point, however, we'll pretend the controller is moving upwards.
+      var lastPosition;
+      if (strokeDef.points.length > 1) {
+        lastPosition = AFRAME.utils.coordinates.toVector3(
+          AFRAME.utils.coordinates.parse(strokeDef.points[1]));
+        lastPosition.y += yFightAdjust;
+      } else {
+        lastPosition = AFRAME.utils.coordinates.toVector3(
+          AFRAME.utils.coordinates.parse(strokeDef.points[0]));
+        lastPosition.y -= 1; // (we'll negate, so negate here too.)
+      }
+
+      for (var p = 0; p < strokeDef.points.length; p++) {
+        // for now every point is just a position
+        var pointDef = strokeDef.points[p];
+        var position = AFRAME.utils.coordinates.toVector3(
+          AFRAME.utils.coordinates.parse(pointDef));
+        position.y += yFightAdjust;
+
+        // We imagine our controller sitting on a plane characterized by y=0
+        // pointed along the z-axis.  The orientation is a quaternion describing
+        // the rotation of the plane.
+
+        // Compute the delta between the current position and the last position.
+        // We imagine the controller moved along this vector, held parallel to
+        // it and rotated about this axis so that it is right-side up.  (Where
+        // we define right-side up as the rotation that maximizes the dot
+        // product of its up/normal with the +y axis.)
+        delta.subVectors(position, lastPosition);
+        if (p === 0) {
+          // our orientation is backwards based on our base lastPosition hack.
+          delta.negate();
+        }
+
+        // Although we have the delta, we don't want to just compute the
+        // rotation from the prior imaginary "+z" vector to the delta because
+        // this won't maintain our up-maximizing goal.  So we decompose the
+        // delta into separate rotations around +x and +y.
+        xPlaneProj.set(0, delta.y, delta.z);
+        xPlaneProj.normalize();
+        xRot.setFromUnitVectors(alongController, xPlaneProj);
+
+        // Vertical special-case.  Don't reset the y-rotation if this is
+        // a purely vertical delta.  This provides a memory effect for us.
+        // (Unfortunately, as we're implementing this, strokes that start off
+        // vertical will inherit their memory of the most recent stroke segment
+        // that was not purely vertical.  And if this is the first stroke
+        // segment ever, things will just be informed by the zeroed quaternion.)
+        if (delta.x || delta.z) {
+          yPlaneProj.set(delta.x, 0, delta.z);
+          yPlaneProj.normalize();
+          yRot.setFromUnitVectors(alongController, yPlaneProj);
+        }
+
+        orientation.multiplyQuaternions(yRot, xRot);
+        delta.normalize();
+
+        stroke.addPoint(position, orientation, position, 1, 0);
+
+        lastPosition = position;
+      }
+    }
+    console.log(serialized.strokes.length, 'strokes rendered.');
+  },
   loadFromUrl: function (url) {
+    console.log('loading painting from', url);
     var loader = new THREE.XHRLoader(this.manager);
     loader.crossOrigin = 'anonymous';
-    loader.setResponseType('arraybuffer');
+    var isJSON = /\.json$/.test(url);
+    loader.setResponseType(isJSON ? 'json' : 'arraybuffer');
 
     var self = this;
-    loader.load(url, function (buffer) {
-      self.loadBinary(buffer);
+    loader.load(url, function (data) {
+      try {
+        if (isJSON) {
+          self.loadJSON(data);
+        } else {
+          self.loadBinary(data);
+        }
+      } catch (ex) {
+        console.error('error loading painting from URL:', ex);
+      }
     });
   }
 });

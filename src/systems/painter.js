@@ -25,10 +25,15 @@ AFRAME.registerSystem('painter', {
     var urlParams = getUrlParams();
     if (urlParams.url) {
       this.brushSystem.loadFromUrl(urlParams.url);
-      document.getElementById('logo').setAttribute('visible', false);
-      document.getElementById('acamera').setAttribute('orbit-controls', 'position', '0 1.6 3');
-      document.getElementById('apainter-logo').classList.remove('hidden');
-      document.getElementById('apainter-author').classList.remove('hidden');
+      // At least how the build is happening right now, the attempt to
+      // manipulate the logo is premature because the components aren't fully
+      // loaded yet.  So defer it to a future turn of the event loop.
+      setTimeout(function() {
+        document.getElementById('logo').setAttribute('visible', false);
+        document.getElementById('acamera').setAttribute('orbit-controls', 'position', '0 1.6 3');
+        document.getElementById('apainter-logo').classList.remove('hidden');
+        document.getElementById('apainter-author').classList.remove('hidden');
+      }, 0);
     }
 
     this.startPainting = false;
